@@ -9,13 +9,13 @@ from models.ensemble import EnsembleModel
 from data.fetch_data import fetch_stock_data
 from data.sentiment_analysis import get_news_sentiment
 from data.indicators import calculate_technical_indicators
-from portfolio.optimization import MarkowitzOptimization
-from portfolio.risk_management import stop_loss_take_profit, calculate_var
-from strategies.put_call_parity import put_call_parity_strategy
-from strategies.straddle import straddle_strategy
-from strategies.strangle import strangle_strategy
+from portfolio.optimization import PortfolioOptimization
+from portfolio.risk_management import RiskManagement
+from strategies.put_call_parity import PutCallParity
+from strategies.straddle import StraddleStrategy
+from strategies.strangle import StrangleStrategy
 from utils.logging_utils import setup_logging
-from utils.interpretability import explain_predictions
+from utils.interpretability import ModelInterpretability
 from utils.news_ticker import display_news_ticker
 
 # Setup logging
@@ -94,31 +94,48 @@ if st.button("Predict"):
             # Strategies
             st.markdown("### Trading Strategies")
             st.write("**Put-Call Parity Strategy:**")
-            st.write(put_call_parity_strategy(ticker, target_date))
+            st.write(PutCallParity(ticker, target_date))
             st.write("**Straddle Strategy:**")
-            st.write(straddle_strategy(ticker, target_date))
+            st.write(StraddleStrategy(ticker, target_date))
             st.write("**Strangle Strategy:**")
-            st.write(strangle_strategy(ticker, target_date))
+            st.write(StrangleStrategy(ticker, target_date))
 
             # Portfolio Optimization
             st.markdown("### Portfolio Optimization")
             try:
                 st.write("**Markowitz Optimization:**")
-                st.write(MarkowitzOptimization(data))
+                portfolio_optimizer = PortfolioOptimization(data)
+                optimized_portfolio = portfolio_optimizer.optimize_portfolio()
+
+                st.write("Optimized Portfolio Weights:")
+                st.write({col: round(w, 4) for col, w in zip(data.columns, optimized_portfolio['weights'])})
+                st.write(f"Expected Annual Return: {optimized_portfolio['expected_return']:.2f}")
+                st.write(f"Portfolio Volatility: {optimized_portfolio['volatility']:.2f}")
+                st.write(f"Sharpe Ratio: {optimized_portfolio['sharpe_ratio']:.2f}")
             except Exception as e:
                 st.error(f"Error in portfolio optimization: {e}")
 
+
             # Risk Management
+            
             st.markdown("### Risk Management")
-            st.write("**Stop-Loss/Take-Profit Strategy:**")
-            st.write(stop_loss_take_profit(data))
-            st.write("**Value at Risk (VaR):**")
-            st.write(calculate_var(data))
+
+            # Initialize RiskManagement class
+            risk_manager = RiskManagement(data['Close'].pct_change().dropna())
+
+            # Stop-loss strategy
+            stop_loss_price = risk_manager.stop_loss(data['Close'].iloc[-1], stop_loss_percentage=5)
+            st.write("Stop-Loss Price:", stop_loss_price)
+
+            # Value at Risk (VaR)
+            var = risk_manager.value_at_risk()
+            st.write("Value at Risk (VaR):", var)
+
 
             # Explain predictions
             st.markdown("### Model Interpretability")
             st.write("**SHAP Explanations:**")
-            st.write(explain_predictions(ensemble_model, features))
+            st.write(ModelInterpretability(ensemble_model, features))
 
             # Display live news ticker
             st.markdown("### Live Stock News")

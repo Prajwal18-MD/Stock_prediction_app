@@ -1,14 +1,11 @@
-import shap
+import streamlit as st
 
-class ModelInterpretability:
-    def __init__(self, model, data):
-        self.model = model
-        self.data = data
+def display_news_ticker(news_headlines):
+    """
+    Display a scrolling news ticker.
+    """
+    st.markdown(
+        f'<marquee>{ " | ".join(news_headlines) }</marquee>',
+        unsafe_allow_html=True
+    )
 
-    def shap_explanation(self):
-        """
-        Generate SHAP explanations.
-        """
-        explainer = shap.TreeExplainer(self.model)
-        shap_values = explainer.shap_values(self.data)
-        shap.summary_plot(shap_values, self.data, show=False)

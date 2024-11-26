@@ -1,22 +1,19 @@
 import yfinance as yf
-import pandas as pd
 
 def fetch_stock_data(ticker):
     """
-    Fetch historical stock data from the stock's inception until today.
-    :param ticker: Stock ticker symbol.
-    :return: DataFrame containing stock data.
+    Fetch historical stock data for a given ticker.
+    :param ticker: Stock ticker symbol (e.g., "AAPL")
+    :return: DataFrame with stock data
     """
     try:
-        # Use period="max" to fetch data from the earliest available date
-        stock_data = yf.download(ticker, period="max")
-        
-        # Select relevant columns
-        stock_data = stock_data[['Open', 'High', 'Low', 'Close', 'Volume']]
-        
-        # Reset the index to ensure it's properly formatted
-        stock_data.reset_index(inplace=True)
-        
-        return stock_data
+        stock_data = yf.Ticker(ticker)
+        df = stock_data.history(period="max")  # Fetch all available data
+        if df.empty:
+            raise ValueError(f"No data found for ticker: {ticker}")
+        df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
+        df.index = df.index.date  # Set index to date for consistency
+        return df
     except Exception as e:
-        raise ValueError(f"Error fetching data for {ticker}: {e}")
+        print(f"Error fetching stock data for {ticker}: {e}")
+        return None

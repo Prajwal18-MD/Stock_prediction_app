@@ -6,14 +6,14 @@ tensorflow
 yfinance
 requests
 beautifulsoup4
-lxml
+lxml[html_clean]
 torch
 transformers
 textblob
+newspaper3k
 xgboost
 lightgbm
 catboost
 shap
 lime
 optuna
-

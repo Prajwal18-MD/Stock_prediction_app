@@ -7,11 +7,13 @@ yfinance
 requests
 beautifulsoup4
 lxml
-pytorch
+torch
 transformers
+textblob
 xgboost
 lightgbm
 catboost
 shap
 lime
 optuna
+

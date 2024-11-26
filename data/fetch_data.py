@@ -1,26 +1,22 @@
 import yfinance as yf
 import pandas as pd
 
-class DataFetcher:
-    def __init__(self, ticker):
-        self.ticker = ticker
-
-    def fetch_data(self, start_date, end_date):
-        """
-        Fetch historical stock data.
-        :param start_date: The start date for fetching data.
-        :param end_date: The end date for fetching data.
-        :return: DataFrame with stock data.
-        """
-        stock_data = yf.download(self.ticker, start=start_date, end=end_date)
+def fetch_stock_data(ticker):
+    """
+    Fetch historical stock data from the stock's inception until today.
+    :param ticker: Stock ticker symbol.
+    :return: DataFrame containing stock data.
+    """
+    try:
+        # Use period="max" to fetch data from the earliest available date
+        stock_data = yf.download(ticker, period="max")
+        
+        # Select relevant columns
         stock_data = stock_data[['Open', 'High', 'Low', 'Close', 'Volume']]
+        
+        # Reset the index to ensure it's properly formatted
+        stock_data.reset_index(inplace=True)
+        
         return stock_data
-
-    def fetch_live_price(self):
-        """
-        Fetch the latest stock price.
-        :return: Latest price as float.
-        """
-        stock = yf.Ticker(self.ticker)
-        live_price = stock.history(period="1d")['Close'].iloc[-1]
-        return live_price
+    except Exception as e:
+        raise ValueError(f"Error fetching data for {ticker}: {e}")

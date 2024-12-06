@@ -32,29 +32,43 @@ st.write("👋 Welcome to the **Stock Prediction and Trading Strategies App**! A
 @st.cache_data
 def fetch_data(ticker):
     try:
-        data = yf.download(ticker, start="2000-01-01")
+        stock = yf.Ticker(ticker)
+        data = stock.history(period="max")
         data.reset_index(inplace=True)
-        return data
+        currency = stock.info.get("currency", "N/A")  # Fetch stock currency
+        return data, currency
     except Exception as e:
         st.error(f"⚠️ Error fetching data: {e}")
         logging.error(f"Error fetching data: {e}")
-        return None
+        return None, None
+
 
 # Fetch options chain data
 def fetch_options_chain(ticker):
     try:
         stock = yf.Ticker(ticker)
         options_chain = stock.options
+        if not options_chain:  # Check if options_chain is empty
+            st.warning(f"No options chain available for {ticker}.")
+            return None
+        
         options_data = {}
         for date in options_chain:
-            calls = stock.option_chain(date).calls
-            puts = stock.option_chain(date).puts
-            options_data[date] = {'calls': calls, 'puts': puts}
+            chain = stock.option_chain(date)
+            options_data[date] = {'calls': chain.calls, 'puts': chain.puts}
         return options_data
     except Exception as e:
         st.error(f"⚠️ Error fetching options chain data: {e}")
         logging.error(f"Error fetching options chain data: {e}")
         return None
+
+
+def put_call_parity(spot_price, call_price, put_price, strike_price, rate, time_to_maturity):
+    # Calculate present value of the strike price
+    pv_strike = strike_price / (1 + rate) ** time_to_maturity
+    lhs = call_price + pv_strike
+    rhs = put_price + spot_price
+    return lhs, rhs, abs(lhs - rhs) < 0.01  # Return if parity holds
 
 # Technical Indicators
 def compute_rsi(data, window=14):
@@ -128,13 +142,17 @@ if ticker and predict_button:
     st.success(f"🔍 Analyzing **{ticker}** | Prediction Date: **{date_input}**")
 
     # Fetch stock data
-    data = fetch_data(ticker)
+    data, currency = fetch_data(ticker)
     if data is not None:
         st.subheader("📊 Raw Data")
         st.write(data.tail())
+        
+        # Display dynamic currency
+        st.markdown(f"💱 Currency: **{currency}**")
 
-        st.subheader("📈 Closing Price Trend")
+        st.subheader(f"📈 Closing Price Trend ({currency})")
         st.line_chart(data['Close'])
+
 
         # Technical Indicators
         st.subheader("📊 Technical Indicators")
@@ -146,11 +164,12 @@ if ticker and predict_button:
         st.line_chart(rsi)
         st.write("🔵 **Bollinger Bands**")
         fig, ax = plt.subplots()
-        ax.plot(data['Close'], label='Close Price', color='blue')
-        ax.plot(upper_band, label='Upper Band', color='red')
-        ax.plot(lower_band, label='Lower Band', color='green')
+        ax.plot(data['Close'], label=f'Close Price ({currency})', color='blue')
+        ax.plot(upper_band, label=f'Upper Band ({currency})', color='red')
+        ax.plot(lower_band, label=f'Lower Band ({currency})', color='green')
         ax.legend()
         st.pyplot(fig)
+
 
         st.write("🔵 **MACD**")
         fig, ax = plt.subplots()
@@ -197,20 +216,74 @@ if ticker and predict_button:
         ax.legend()
         st.pyplot(fig)
 
-        # Predicted future price (Improved Font Size)
+        # Predicted future price display
         predicted_price = test_predictions[-1][0]
-        st.markdown(f"<h2 style='font-size: 32px;'>🎯 Predicted future price for **{ticker}**: **{predicted_price:.2f} USD**</h2>", unsafe_allow_html=True)
+        st.markdown(
+            f"<h2 style='font-size: 32px;'>🎯 Predicted future price for **{ticker}**: "
+            f"**{predicted_price:.2f} {currency}**</h2>",
+            unsafe_allow_html=True,
+        )
 
         # Options Chain
-        st.subheader("💡 Trading Strategies: Options Chain")
         options_data = fetch_options_chain(ticker)
+        st.write("Debug: Options Data", options_data)
+
         if options_data:
+            st.subheader("💡 Trading Strategies: Put-Call Parity Analysis")
             for date, data in options_data.items():
                 with st.expander(f"Options Expiry: {date}"):
-                    st.write("📈 Calls")
-                    st.write(data['calls'].head())
-                    st.write("📉 Puts")
-                    st.write(data['puts'].head())
+                    # Check for missing or empty data
+                    if data['calls'].empty or data['puts'].empty:
+                        st.warning(f"Calls or Puts data is empty for expiry {date}. Skipping.")
+                        continue
+                    
+                    if 'lastPrice' not in data['calls'].columns or 'lastPrice' not in data['puts'].columns:
+                        st.warning(f"Missing 'lastPrice' column in Calls or Puts for expiry {date}. Skipping.")
+                        continue
+
+                    if 'strike' not in data['calls'].columns:
+                        st.warning(f"Missing 'strike' column in Calls data for expiry {date}. Skipping.")
+                        continue
+
+                    # Use first valid spot price
+                    spot_price = data['calls']['lastPrice'].dropna().iloc[0] if not data['calls']['lastPrice'].dropna().empty else None
+                    if spot_price is None:
+                        st.warning(f"No valid spot price in Calls data for expiry {date}. Skipping.")
+                        continue
+
+                    # Debug output
+                    st.write(f"Debug: Calls Head for {date}", data['calls'].head())
+                    st.write(f"Debug: Puts Head for {date}", data['puts'].head())
+
+                    # Iterate through calls and match with puts by index
+                    for idx, row in data['calls'].iterrows():
+                        # Ensure index is within bounds for puts DataFrame
+                        if idx >= len(data['puts']):
+                            st.warning(f"Mismatch in Calls and Puts data sizes for expiry {date}. Skipping unmatched rows.")
+                            break
+
+                        # Fetch matching put price
+                        put_row = data['puts'].iloc[idx]
+
+                        # Perform Put-Call Parity calculation
+                        lhs, rhs, parity_holds = put_call_parity(
+                            spot_price=spot_price,
+                            call_price=row['lastPrice'],
+                            put_price=put_row['lastPrice'],
+                            strike_price=row['strike'],
+                            rate=0.05,  # Example risk-free rate
+                            time_to_maturity=30 / 365,  # Example time to maturity (30 days)
+                        )
+
+                        # Display the results
+                        st.write(
+                            f"Strike Price: {row['strike']} | Parity Holds: {parity_holds} | "
+                            f"LHS (C + PV(X)): {lhs:.2f} {currency} | RHS (P + S): {rhs:.2f} {currency}"
+                        )
+        else:
+            st.write("No options data available for this selected Stock.")
+
+                    
 
         # Latest News
         st.subheader("📰 Latest News")

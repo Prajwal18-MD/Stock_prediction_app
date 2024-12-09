@@ -6,4 +6,5 @@ scikit-learn==1.5.2
 statsmodels==0.14.4
 streamlit==1.40.2
 tensorflow==2.18.0
+textblob==0.18.0.post0
 yfinance==0.2.50

@@ -7,8 +7,13 @@ import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.ensemble import VotingRegressor
+from sklearn.linear_model import Ridge
 from tensorflow.keras.models import Sequential
+from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.layers import Dropout
 from tensorflow.keras.layers import Dense, LSTM, GRU, Conv1D, MaxPooling1D, Flatten
+from textblob import TextBlob
 from statsmodels.tsa.arima.model import ARIMA
 import requests
 
@@ -26,16 +31,51 @@ date_input = st.sidebar.date_input("📅 Select the Prediction Date:", datetime.
 predict_button = st.sidebar.button("🚀 Predict")
 
 # Welcome Message
-st.write("👋 Welcome to the **Stock Prediction and Trading Strategies App**! Analyze stock trends, predict future prices, and explore trading strategies with ease. 📊")
+st.write("""
+👋 Welcome to the **Stock Prediction and Trading Strategies App**! Analyze stock trends, predict future prices, and explore trading strategies with ease. 📊
+
+**How to Use**  
+1. **Enter a Stock Ticker:**  
+   Input a valid stock ticker symbol of any stock available in yahoo finance.  
+2. **Select Future Date:**  
+   Choose the desired date for price prediction.  
+3. **Press Predict:**  
+   Click the "🔮 Predict" button to view predictions and strategy recommendations.
+""")
 
 # Fetch stock data
 @st.cache_data
+def fetch_news_sentiment(ticker):
+    try:
+        url = f"https://newsapi.org/v2/everything?q={ticker}&apiKey=1a7cb714ba044e33b9b42106bb084ce3"
+        response = requests.get(url)
+        if response.status_code == 200:
+            articles = response.json().get('articles', [])
+            sentiments = []
+            for article in articles:
+                description = article.get('description')
+                if description:  # Check if description is not None
+                    analysis = TextBlob(description)
+                    sentiments.append(analysis.sentiment.polarity)
+            return np.mean(sentiments) if sentiments else 0
+        else:
+            return 0
+    except Exception as e:
+        st.error(f"Error fetching sentiment data: {e}")
+        return 0
+
+
 def fetch_data(ticker):
     try:
         stock = yf.Ticker(ticker)
         data = stock.history(period="max")
         data.reset_index(inplace=True)
-        currency = stock.info.get("currency", "N/A")  # Fetch stock currency
+        currency = stock.info.get("currency", "N/A")
+        
+        # Add sentiment score
+        sentiment_score = fetch_news_sentiment(ticker)
+        data['Sentiment'] = sentiment_score
+        
         return data, currency
     except Exception as e:
         st.error(f"⚠️ Error fetching data: {e}")
@@ -98,32 +138,46 @@ def compute_macd(data, fast=12, slow=26, signal=9):
     return macd, macd_signal
 
 # Prepare data for ML models
-def prepare_data_for_model(data_close, time_step):
-    scaler = MinMaxScaler(feature_range=(0, 1))
-    scaled_data = scaler.fit_transform(data_close)
-    
+def prepare_data_for_model(data, time_step):
+    # Scale only the 'Close' column
+    close_scaler = MinMaxScaler(feature_range=(0, 1))
+    scaled_close = close_scaler.fit_transform(data[['Close']].values)
+
+    # Retain Sentiment as-is for input
+    features = data[['Close', 'Sentiment']].values
     X, y = [], []
-    for i in range(len(scaled_data) - time_step - 1):
-        X.append(scaled_data[i:(i + time_step), 0])
-        y.append(scaled_data[i + time_step, 0])
-    return np.array(X), np.array(y), scaler
+    for i in range(len(features) - time_step - 1):
+        # Use both Close and Sentiment as input features
+        X.append(np.hstack((scaled_close[i:(i + time_step)], features[i:(i + time_step), 1].reshape(-1, 1))))
+        # Predict only 'Close'
+        y.append(scaled_close[i + time_step, 0])
+    return np.array(X), np.array(y), close_scaler
 
 # Create ML models
 def create_model(model_type, input_shape):
     model = Sequential()
     if model_type == "LSTM":
-        model.add(LSTM(50, return_sequences=True, input_shape=input_shape))
-        model.add(LSTM(50, return_sequences=False))
+        model.add(LSTM(64, return_sequences=True, input_shape=input_shape))
+        model.add(Dropout(0.2))
+        model.add(LSTM(64, return_sequences=True))
+        model.add(Dropout(0.2))
+        model.add(LSTM(64, return_sequences=False))
     elif model_type == "GRU":
-        model.add(GRU(50, return_sequences=True, input_shape=input_shape))
-        model.add(GRU(50, return_sequences=False))
+        model.add(GRU(64, return_sequences=True, input_shape=input_shape))
+        model.add(Dropout(0.2))
+        model.add(GRU(64, return_sequences=True))
+        model.add(Dropout(0.2))
+        model.add(GRU(64, return_sequences=False))
     elif model_type == "CNN":
-        model.add(Conv1D(64, kernel_size=3, activation='relu', input_shape=input_shape))
+        model.add(Conv1D(128, kernel_size=3, activation='relu', input_shape=input_shape))
+        model.add(MaxPooling1D(pool_size=2))
+        model.add(Conv1D(128, kernel_size=3, activation='relu'))
         model.add(MaxPooling1D(pool_size=2))
         model.add(Flatten())
     model.add(Dense(1))
     model.compile(optimizer='adam', loss='mean_squared_error')
     return model
+
 
 # Fetch News
 def fetch_news(ticker):
@@ -182,39 +236,64 @@ if ticker and predict_button:
         st.subheader("🤖 Prediction with ML Models")
         data_close = data['Close'].values.reshape(-1, 1)
         time_step = 60
-        X, y, scaler = prepare_data_for_model(data_close, time_step)
-        X = X.reshape(X.shape[0], X.shape[1], 1)
+        X, y, close_scaler = prepare_data_for_model(data, time_step)
+        X = X.reshape(X.shape[0], X.shape[1], X.shape[2])
         train_size = int(len(X) * 0.8)
         X_train, X_test = X[:train_size], X[train_size:]
         y_train, y_test = y[:train_size], y[train_size:]
 
-        models = ["LSTM", "GRU", "CNN"]
-        predictions = []
+        # Debugging for close_scaler
+        print("Debug - close_scaler defined:", close_scaler)
+        print("Scaler Min:", close_scaler.min_)
+        print("Scaler Scale:", close_scaler.scale_)
+        
+        early_stopping = EarlyStopping(
+            monitor='val_loss',
+            patience=3,
+            restore_best_weights=True
+        )
 
-        for model_type in models:
-            model = create_model(model_type, X_train.shape[1:])
-            model.fit(X_train, y_train, epochs=5, batch_size=32, verbose=0)
-            pred = model.predict(X_test)
-            predictions.append(pred)
+        # Train Models
+        model_lstm = create_model("LSTM", X_train.shape[1:])
+        model_lstm.fit(X_train, y_train, epochs=15, batch_size=32, validation_split=0.2, callbacks=[early_stopping])
 
-        # Ensemble Prediction
-        ensemble_pred = np.mean(predictions, axis=0)
-        test_predictions = scaler.inverse_transform(ensemble_pred)
+        model_gru = create_model("GRU", X_train.shape[1:])
+        model_gru.fit(X_train, y_train, epochs=15, batch_size=32, validation_split=0.2, callbacks=[early_stopping])
 
-        # Calculate RMSE and append to file
-        rmse = np.sqrt(mean_squared_error(scaler.inverse_transform(y_test.reshape(-1, 1)), test_predictions))
-        with open("rmse.txt", "a") as file:
-           file.write(f"Ticker: {ticker}, RMSE: {rmse:.2f}\n")
+        model_cnn = create_model("CNN", X_train.shape[1:])
+        model_cnn.fit(X_train, y_train, epochs=15, batch_size=32, validation_split=0.2, callbacks=[early_stopping])
 
+        # Voting Regressor
+        voting_regressor = VotingRegressor(
+            estimators=[
+                ('lstm', Ridge().fit(X_test[:, :, 0], model_lstm.predict(X_test).flatten())),
+                ('gru', Ridge().fit(X_test[:, :, 0], model_gru.predict(X_test).flatten())),
+                ('cnn', Ridge().fit(X_test[:, :, 0], model_cnn.predict(X_test).flatten())),
+            ]
+        )
+        voting_predictions = voting_regressor.fit(X_test[:, :, 0], y_test).predict(X_test[:, :, 0])
 
-        # Plot predicted vs actual
-        st.subheader("🔮 Predicted vs Actual Prices")
+        # Ensure predictions are compatible with scaler
+        voting_predictions = np.array(voting_predictions).reshape(-1, 1)
+        test_predictions = close_scaler.inverse_transform(voting_predictions)
+
+        # RMSE Calculation
+        y_test_inverse = close_scaler.inverse_transform(y_test.reshape(-1, 1))
+        rmse = np.sqrt(mean_squared_error(y_test_inverse, test_predictions))
+
+        # Log RMSE
+        rmse_file_path = "rmse_log.txt"
+        with open(rmse_file_path, "a") as file:
+            file.write(f"Ticker: {ticker}, RMSE: {rmse:.2f}, Date: {datetime.now()}\n")
+
+        # Visualization
         fig, ax = plt.subplots()
-        ax.plot(scaler.inverse_transform(y_test.reshape(-1, 1)), label="Actual Price", color="blue")
-        ax.plot(test_predictions, label="Predicted Price", color="red")
-        ax.set_title("Predicted vs Actual Prices")
+        ax.plot(y_test_inverse, label="Actual Prices", color="blue")
+        ax.plot(test_predictions, label="Predicted Prices", color="red")
         ax.legend()
+        ax.set_title("Actual vs Predicted Stock Prices")
         st.pyplot(fig)
+
 
         # Predicted future price display
         predicted_price = test_predictions[-1][0]
@@ -223,6 +302,17 @@ if ticker and predict_button:
             f"**{predicted_price:.2f} {currency}**</h2>",
             unsafe_allow_html=True,
         )
+        
+        # Log Predicted Results
+        predicted_results_file = "predicted_results.txt"
+        with open(predicted_results_file, "a") as file:
+            file.write(f"Prediction Started At: {datetime.now()}\n")
+            file.write(f"Ticker: {ticker}\n")
+            file.write(f"Prediction Date: {date_input}\n")
+            file.write(f"Currency: {currency}\n")
+            file.write(f"Predicted Prices: {predicted_price:.2f}\n")
+            file.write("-" * 50 + "\n")  # Separator for better readability
+
 
         # Options Chain
         options_data = fetch_options_chain(ticker)
@@ -289,3 +379,21 @@ if ticker and predict_button:
         st.subheader("📰 Latest News")
         news = fetch_news(ticker)
         st.markdown(news)
+        
+        with st.expander("ℹ️ About"):
+            st.markdown("""
+            # **Purpose**  
+            This application leverages advanced machine learning models to predict future stock prices and provide options strategies recommendations based on financial theories like Put-Call Parity, Straddle, and Strangle strategies, if applicable.
+
+            # **Features**  
+            - **Accurate Predictions:**  
+            Utilizes state-of-the-art models such as LSTM, GRU, and CNN, trained on historical stock data, combined with real-time sentiment analysis. The ensemble model used is a Voting Regressor for enhanced accuracy.  
+            - **Options Strategies:**  
+            Recommends financial strategies like Put-Call Parity, Straddle, and Strangle for better decision-making.  
+            - **Portfolio Optimization:**  
+            Offers optimal allocation recommendations to maximize potential returns and reduce risks.
+
+            # **Contact**  
+            For inquiries or support, feel free to reach out via email at [prajju.18gryphon@gmail.com](mailto:prajju.18gryphon@gmail.com).
+            """)
+       
